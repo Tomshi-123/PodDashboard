@@ -1,73 +1,80 @@
-# Design Document — PodDashboard
+# Designdokument — PodDashboard
 
-## Knowledge Domain
+## Kunskapsdomän
 
-PodDashboard is a podcast aggregation service. The core idea is that podcasts are distributed via RSS feeds — standardized XML files that list episodes with metadata (title, description, audio URL, publish date). This application acts as a personal feed reader: users subscribe to podcasts by providing RSS URLs, and the backend automatically fetches and stores new episodes on a schedule.
+PodDashboard är en personlig podcast-dashboard. Användaren söker efter podcasts via Spotify, lägger till dem i sitt bibliotek och kan bläddra bland de senaste avsnitten. Applikationen hämtar automatiskt avsnitt från Spotify API och uppdaterar databasen varje timme via ett schemalagt jobb.
 
----
 
-## Database Design
-
-### Entities
-
-**Podcast**
-Represents a subscribed podcast show.
-
-| Field        | Type           | Notes            |
-| ------------ | -------------- | ---------------- |
-| `_id`        | ObjectId       | Auto-generated   |
-| `title`      | String         | Required         |
-| `rss_url`    | String         | Required, unique |
-| `image_url`  | String \| null | Cover art URL    |
-| `created_at` | Date           | Default: now     |
-
-**Episode**
-Represents a single episode from a podcast feed.
-
-| Field          | Type                    | Notes                                     |
-| -------------- | ----------------------- | ----------------------------------------- |
-| `_id`          | ObjectId                | Auto-generated                            |
-| `podcast`      | ObjectId (ref: Podcast) | Foreign key                               |
-| `title`        | String                  | Required                                  |
-| `description`  | String \| null          | Optional                                  |
-| `audio_url`    | String                  | Required, unique — used for deduplication |
-| `published_at` | Date                    | Required                                  |
-
-### Relationships
-
-A Podcast has many Episodes (one-to-many). The `podcast` field on Episode is a MongoDB reference (`ref: "Podcast"`) and is populated when querying episodes, so callers receive the podcast's `title` and `image_url` inline.
-
-`audio_url` is used as the natural unique key for deduplication — RSS feeds are fetched repeatedly, and this prevents the same episode from being stored twice.
 
 ---
 
-## Architecture Reasoning
+## Databasdesign
 
-The project uses a lightweight, flat structure suited to its scale:
+Databasen har två collections med en en-till-många-relation: en podcast har många avsnitt.
 
-- **Routes** handle HTTP concerns (parsing request, sending response, error delegation).
-- **Models** (Mongoose schemas) handle data shape and database access.
-- **rssService** is kept as a separate service because it handles external I/O (HTTP requests to third-party RSS feeds) and parsing logic — a distinct concern from the REST API layer.
-- **rssFetchJob** encapsulates the scheduling concern (node-cron) and is separated to keep `server.ts` clean.
+### Podcast
 
-This avoids over-engineering (no separate controller/service/repository layers for simple CRUD) while still maintaining clear separation of concerns for the parts that warrant it.
+| Fält         | Typ            | Notering                                    |
+| ------------ | -------------- | ------------------------------------------- |
+| `_id`        | ObjectId       | Auto-genererat av MongoDB                   |
+| `title`      | String         | Obligatoriskt                               |
+| `spotify_id` | String         | Obligatoriskt, unikt — förhindrar dubletter |
+| `image_url`  | String \| null | Omslagsbild från Spotify                    |
+| `created_at` | Date           | Sätts automatiskt vid skapande              |
 
-### Graceful Shutdown
+### Episode
 
-The server listens for `SIGTERM` and `SIGINT` signals. On shutdown:
+| Fält           | Typ                     | Notering                                         |
+| -------------- | ----------------------- | ------------------------------------------------ |
+| `_id`          | ObjectId                | Auto-genererat av MongoDB                        |
+| `podcast`      | ObjectId (ref: Podcast) | Referens till podcasen — som en foreign key      |
+| `title`        | String                  | Obligatoriskt                                    |
+| `description`  | String \| null          | Valfritt                                         |
+| `spotify_url`  | String                  | Obligatoriskt, unikt — används för deduplicering |
+| `published_at` | Date                    | Publiceringsdatum från Spotify                   |
 
-1. The cron job is stopped.
-2. The HTTP server stops accepting new connections and waits for in-flight requests to finish.
-3. The MongoDB connection is closed cleanly.
+### Relation
 
-This prevents data loss and ensures the process exits in a known state.
+En Podcast har många Episodes (en-till-många). Fältet `podcast` på Episode är en MongoDB-referens (`ref: "Podcast"`). När avsnitt hämtas via API:et används Mongoose's `populate()` för att hämta in podcastens `title` och `image_url` — vilket gör att klienten får all relevant data i ett anrop.
 
-### Error Handling
+`spotify_url` används som naturlig unik nyckel för deduplicering. Eftersom avsnitt hämtas om varje timme förhindrar detta att samma avsnitt sparas flera gånger.
 
-The global error handler in `app.ts` distinguishes between:
+---
 
-- **409 Conflict** — MongoDB duplicate key errors (e.g. adding a podcast with an existing RSS URL)
-- **400 Bad Request** — Mongoose CastError (e.g. invalid ObjectId in a route parameter)
-- **500 Internal Server Error** — all other unexpected errors
+## Arkitekturresonemang
 
-Route-level validation returns **400** before hitting the database when required fields are missing.
+Projektet är uppdelat i tydliga lager med separation of concerns:
+
+- **Routes** — definierar enbart HTTP-metod och URL, pekar vidare till controllers. Ingen logik.
+- **Controllers** — all affärslogik. Läser request, pratar med databasen, skickar svar. Delegerar fel med `next(err)`.
+- **Services** — hanterar extern kommunikation med Spotify API. Separerat eftersom det är ett eget ansvarsområde skilt från REST-lagret.
+- **Models** — Mongoose-scheman som definierar datastruktur och validering.
+- **Middleware** — centraliserad felhantering och request-loggning. Registreras i `app.ts` och gäller för hela applikationen.
+- **Jobs** — cronjobbet som schemalägger timvis uppdatering. Separerat för att hålla `server.ts` rent.
+
+Denna uppdelning följer DRY-principen — felhantering, loggning och Spotify-kommunikation är skrivna på ett ställe och återanvänds överallt.
+
+---
+
+## Felhantering
+
+Felhanteringen är centraliserad i `middleware/errorHandler.ts`. Controllers behöver inte hantera fel själva — de skickar vidare med `next(err)` och Express dirigerar till felhanteraren automatiskt.
+
+Följande fel hanteras:
+
+- **409 Conflict** — Mongoose duplicate key (t.ex. lägga till samma podcast igen)
+- **400 Bad Request** — Mongoose CastError (ogiltigt MongoDB-ID i URL)
+- **500 Internal Server Error** — övriga oväntade fel
+
+---
+
+## Graceful Shutdown
+
+Servern lyssnar på `SIGINT` (Ctrl+C) och `SIGTERM`. Vid shutdown sker följande i ordning:
+
+1. Cronjobbet stoppas
+2. HTTP-servern slutar ta emot nya requests och väntar på att pågående ska avslutas
+3. MongoDB-anslutningen stängs
+4. Processen avslutas med `process.exit(0)`
+
+Detta förhindrar att pågående databasoperationer avbryts mitt i och säkerställer ett rent avslut.
