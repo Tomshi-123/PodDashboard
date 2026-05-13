@@ -8,7 +8,7 @@ PodDashboard är en personlig podcast-dashboard. Användaren söker efter podcas
 
 ## Hur jag har tänkt
 
-Tanken med PodDashboard att jag vill ha ett ställe där jag kan se mina podcasts och deras senaste avsnitt, utan att behöva öppna leta runt bland alla podcasts senaste avsnitt på Spotify varje gång där även annat som playlists för musik osv kommer upp. Tanken från början var att jag ska samla podcasts från olika plattformar, inte bara Spotify, så att man slipper hoppa mellan olika appar och leta. 
+Tanken med PodDashboard att jag vill ha ett ställe där jag kan se mina podcasts och deras senaste avsnitt, utan att behöva öppna leta runt bland alla podcasts senaste avsnitt på Spotify varje gång där även annat som playlists för musik osv kommer upp. Tanken från början var att jag ska samla podcasts från olika plattformar, inte bara Spotify, så att man slipper hoppa mellan olika appar och leta.
 
 Databasen har bara två saker att hålla reda på — podcasts och avsnitt. En podcast har många avsnitt, ungefär som en bokhylla har många böcker. Det är en enkel relation och MongoDB passar bra för det.
 
